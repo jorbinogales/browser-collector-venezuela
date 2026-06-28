@@ -14,7 +14,7 @@ function run(file) {
   });
 }
 
-const sources = (process.env.SOURCES || "index.mjs,vtb.mjs")
+const sources = (process.env.SOURCES || "index.mjs,vtb.mjs,redayuda.mjs")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
