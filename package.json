@@ -1,0 +1,17 @@
+{
+  "name": "dtv-browser-collector",
+  "version": "1.0.0",
+  "description": "Colector con navegador real (Playwright) para desaparecidosterremotovenezuela.com; escribe a desaparecidos/dtv-items.json en el mismo bucket.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.mjs",
+    "probe": "node probe.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "playwright": "1.61.1"
+  }
+}
