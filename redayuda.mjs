@@ -1,10 +1,11 @@
 // Colector redayudavenezuela.com — "pacientes hospitalizados".
 //
-// La app expone su data vía `POST /api/data`, pero ese endpoint está topado en 1000
-// registros (ignora offset/page/status). El backend es Supabase y la **clave anon**
-// viene embebida en el JS del sitio (role:anon, exp 2036). PostgREST sí permite
-// paginar con order+limit+offset, así que vamos DIRECTO a la REST de Supabase y
-// recorremos toda la tabla `reports` (kind=hospital) en páginas de 1000.
+// Lee por el endpoint PÚBLICO de la web: `POST /api/data` con
+//   {op:"reports_list", kinds:["hospital"], limit:1000}
+// Es la misma interfaz que usa el propio sitio. Devuelve los ~1000 registros más
+// recientes (orden created_at desc) y el servidor ignora cualquier limit>1000. No
+// accedemos a la tabla de Supabase por detrás: el delta por firstSeenAt basta, porque
+// los reportes nuevos entran arriba de esa ventana de 1000.
 //
 // Escribe baseline + deltas replicando venezuela-reporta-scraper/src/store.ts:
 //   - Railway/Tigris (BUCKET_*)  → prefijo  terremoto-vzla/raw/redayudavenezuela/
@@ -13,21 +14,19 @@
 // control (firstSeenAt) vive en el bucket Railway: redayudavenezuela/hospitalizados-items.json
 //
 // Flags: DRY_RUN=1 (no escribe) · FORCE=1 (ignora el intervalo) · SNAPSHOT_INTERVAL_HOURS
-//        REDAYUDA_SUPABASE_ANON (override de la clave anon si la rotan)
+//        REDAYUDA_API (override del endpoint público)
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 const DRY = process.env.DRY_RUN === "1";
 const FORCE = process.env.FORCE === "1";
 const SNAPSHOT_INTERVAL_HOURS = Number(process.env.SNAPSHOT_INTERVAL_HOURS ?? "24");
 
-const SB_URL = "https://cpavwkdonvkvrwygfzfo.supabase.co";
-const SB_ANON = process.env.REDAYUDA_SUPABASE_ANON ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNwYXZ3a2RvbnZrdnJ3eWdmemZvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzNjAyODMsImV4cCI6MjA5NzkzNjI4M30.-_FAsA2csTrB9qt267pBfjJkczMP7pcaUi4plMv3kv4";
+const API_URL = process.env.REDAYUDA_API || "https://redayudavenezuela.com/api/data";
+const LIMIT = 1000; // tope del endpoint público: el servidor clampa cualquier limit mayor
 
 const FUENTE = "redayudavenezuela";
 const TIPO = "hospitalizados";
 const STORE_KEY = `${FUENTE}/hospitalizados-items.json`;
-const PAGE = 1000;
 
 // Destinos de snapshot (igual que store.ts: Railway + AWS S3 si hay credenciales).
 function makeTargets() {
@@ -61,19 +60,21 @@ async function list(s3, bucket, prefix) {
   return out;
 }
 
-// Recorre reports?kind=hospital paginando por offset (order estable created_at+id).
+// Lee los hospitalizados por el endpoint público `POST /api/data` (op reports_list),
+// la misma interfaz que usa la web. Devuelve los ~1000 más recientes (created_at desc);
+// el servidor ignora limit>1000. El delta por firstSeenAt captura los nuevos.
 async function fetchHospital() {
-  const headers = { apikey: SB_ANON, authorization: "Bearer " + SB_ANON };
-  const all = [];
-  for (let offset = 0; offset < 200000; offset += PAGE) {
-    const url = `${SB_URL}/rest/v1/reports?select=*&kind=eq.hospital&order=created_at.asc,id.asc&limit=${PAGE}&offset=${offset}`;
-    const r = await fetch(url, { headers });
-    if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    const batch = await r.json();
-    all.push(...batch);
-    if (batch.length < PAGE) break;
+  const r = await fetch(API_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "reports_list", kinds: ["hospital"], limit: LIMIT }),
+  });
+  if (!r.ok) throw new Error(`api/data ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json();
+  if (!j?.ok || !Array.isArray(j.data)) {
+    throw new Error(`api/data respuesta inválida: ${JSON.stringify(j).slice(0, 200)}`);
   }
-  return all;
+  return j.data;
 }
 
 const snapDate = (key) => { const m = key.match(/_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})_\d+(?:_jn)?\.json$/); return m ? Date.parse(`${m[1]}T${m[2]}:${m[3]}:00Z`) : null; };
